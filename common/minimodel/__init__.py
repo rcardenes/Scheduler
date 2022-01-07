@@ -17,6 +17,7 @@ from typing import ClassVar, List, Mapping, Optional, Set, Union
 class SiteInformation:
     def __init__(self,
                  name: str,
+                 coordinate_center: str,
                  astropy_lookup: str = None):
         """
         AstroPy location lookups for Gemini North and South are of the form:
@@ -26,12 +27,15 @@ class SiteInformation:
 
         If necessary, other observatories should provide hard astropy_lookup values.
 
-        Time zone information for a site is also included here.
+        The following is also included here:
+        * Time zone information
+        * Coordinate center for Ephemeris lookups
         """
         if astropy_lookup is None:
             astropy_lookup = name.lower().replace(' ', '_')
 
         self.name = name
+        self.coordinate_center = coordinate_center
 
         try:
             self.location = EarthLocation.of_site(astropy_lookup)
@@ -50,8 +54,8 @@ class Site(Enum):
     This will have to be customized by a given observatory if used independently
     of Gemini.
     """
-    GN = SiteInformation('Gemini North')
-    GS = SiteInformation('Gemini South')
+    GN = SiteInformation('Gemini North', '568@399')
+    GS = SiteInformation('Gemini South', 'I11@399')
 
 
 class SemesterHalf(Enum):
@@ -117,7 +121,7 @@ class TimeAccountingCode(str, Enum):
     XCHK = 'Keck Exchange'
 
 
-@dataclass
+@dataclass(unsafe_hash=True)
 class TimeAllocation:
     category: TimeAccountingCode
     program_awarded: timedelta
@@ -314,7 +318,7 @@ class TargetType(Enum):
     BLIND_OFFSET = auto()
     OFF_AXIS = auto()
     TUNING_STAR = auto()
-    GUIDING = auto()
+    GUIDESTAR = auto()
     OTHER = auto()
 
 
@@ -391,6 +395,10 @@ class Resource:
 
 
 class QAState(IntEnum):
+    """
+    These correspond to the QA States in the OCS for Observations.
+    Entries in the obs log should be made upper for lookups.
+    """
     NONE = auto()
     UNDEFINED = auto()
     FAIL = auto()
@@ -457,12 +465,14 @@ class ObservationClass(IntEnum):
     """
     Note that the order of these is specific and deliberate: they are listed in
     preference order for observation classes, and hence, should not be rearranged.
+    These correspond to the values in the OCS when made uppercase.
     """
     SCIENCE = auto()
-    PROG_CAL = auto()
-    PARTNER_CAL = auto()
+    PROGCAL = auto()
+    PARTNERCAL = auto()
     ACQ = auto()
-    ACQ_CAL = auto()
+    ACQCAL = auto()
+    DAYCAL = auto()
 
 
 @dataclass(frozen=True)
@@ -485,8 +495,6 @@ class Observation:
     setuptime_type: SetupTimeType
     acq_overhead: timedelta
     exec_time: timedelta
-    program_used: timedelta
-    partner_used: timedelta
 
     # TODO: This will be handled differently between OCS and GPP.
     # TODO: 1. In OCS, when the sequence is examined, the ObservationClasses of the
@@ -499,13 +507,15 @@ class Observation:
     obs_class: ObservationClass
 
     targets: List[Target]
-    guide_stars: Mapping[Resource, Target]
+    guiding: Mapping[Resource, Target]
     sequence: List[Atom]
-    constraints: Constraints
+
+    # Some observations do not have constraints, e.g. GN-208A-FT-103-6.
+    constraints: Optional[Constraints]
     too_type: Optional[TooType] = None
 
     def total_used(self) -> timedelta:
-        return self.program_used + self.partner_used
+        return self.program_used() + self.partner_used()
 
     def required_resources(self) -> Set[Resource]:
         return {r for a in self.sequence for r in a.required_resources}
@@ -515,6 +525,22 @@ class Observation:
 
     def constraints(self) -> Set[Constraints]:
         return {self.constraints}
+
+    def program_used(self) -> timedelta:
+        """
+        We roll this information up from the atoms as it will be calculated
+        during the GreedyMax algorithm. Note that it is also available directly
+        from the OCS.
+        """
+        return sum(atom.prog_time for atom in self.sequence)
+
+    def partner_used(self) -> timedelta:
+        """
+        We roll this information up from the atoms as it will be calculated
+        during the GreedyMax algorithm. Note that it is also available directly
+        from the OCS.
+        """
+        return sum(atom.part_time for atom in self.sequence)
 
     @staticmethod
     def _select_obsclass(classes: List[ObservationClass]) -> Optional[ObservationClass]:
@@ -540,6 +566,11 @@ class Observation:
         """
         return min(qastates, default=None)
 
+    def __len__(self):
+        """
+        This is to treat observations the same as groups.
+        """
+        return 1
 
 # Since Python doesn't allow classes to self-reference, we have to make a basic group
 # from which to subclass.
