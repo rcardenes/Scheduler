@@ -1,6 +1,6 @@
 from copy import deepcopy
 from datetime import date, datetime
-from threading import Lock
+from asyncio import Lock
 from typing import List, NoReturn
 import pytz
 
@@ -106,28 +106,26 @@ class PlanManager:
         return PlanManager()
 
     @staticmethod
-    def get_plans() -> List[SPlans]:
+    async def get_plans() -> List[SPlans]:
         """
         Make a copy of the plans here and return them.
         This is to ensure that the plans are not corrupted after the
         lock is released.
         """
-        PlanManager._lock.acquire()
-        plans = deepcopy(PlanManager._plans)
-        PlanManager._lock.release()
+        async with PlanManager._lock:
+            plans = deepcopy(PlanManager._plans)
         return plans
 
     @staticmethod
-    def set_plans(plans: List[Plans]) -> NoReturn:
+    async def set_plans(plans: List[Plans]) -> NoReturn:
         """
         Note that we are converting List[Plans] to List[SPlans].
         """
-        PlanManager._lock.acquire()
-        calculated_plans = deepcopy(plans)
-        PlanManager._plans = [
-            SPlans.from_computed_plans(p) for p in calculated_plans
-        ]
-        PlanManager._lock.release()
+        async with PlanManager._lock:
+            calculated_plans = deepcopy(plans)
+            PlanManager._plans = [
+                SPlans.from_computed_plans(p) for p in calculated_plans
+            ]
 
 
 @strawberry.type
@@ -152,7 +150,20 @@ app = FastAPI()
 app.add_route('/graphql', graphql_app)
 app.add_websocket_route('/graphql', graphql_app)
 
+DEFAULT_APP = 'graphql_server:app'
+DEFAULT_HOST = '127.0.0.1'
+DEFAULT_PORT = 8000
+
 
 def start_graphql_server():
+    "This is only for standalone purposes"
     # Using reload=True here resets PlanManager, so only a blank plan is returned.
-    uvicorn.run('graphql_server:app', host='127.0.0.1', port=8000)
+    uvicorn.run(DEFAULT_APP, host=DEFAULT_HOST, port=DEFAULT_PORT)
+
+async def graphql_server_task():
+    "Use this if launching the server from inside an existing event loop"
+    config = uvicorn.Config(app=DEFAULT_APP,
+                            host=DEFAULT_HOST,
+                            port=DEFAULT_PORT)
+    server = uvicorn.Server(config=config)
+    await server.serve()

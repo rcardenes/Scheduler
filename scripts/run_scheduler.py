@@ -1,3 +1,4 @@
+import asyncio
 import os
 from common.minimodel import *
 
@@ -10,9 +11,20 @@ from components.optimizer.dummy import DummyOptimizer
 from components.selector import Selector
 from components.optimizer import Optimizer
 
+import graphql_server
+
+async def launch_graphql_server_task(plans):
+    plan_manager = graphql_server.PlanManager()
+    await plan_manager.set_plans(plans)
+    return asyncio.create_task(graphql_server.graphql_server_task())
+
+async def forever(plans):
+    task = await launch_graphql_server_task(plans)
+    await task
+
 if __name__ == '__main__':
     # SET THIS FLAG TO RUN THE GRAPHQL SERVER AT THE END.
-    run_graphql_server = False
+    run_graphql_server = True
 
     logging.basicConfig(level=logging.INFO)
     ObservatoryProperties.set_properties(GeminiProperties)
@@ -158,12 +170,9 @@ if __name__ == '__main__':
     dummy = DummyOptimizer()
     optimizer = Optimizer(selection, algorithm=dummy)
     plans = optimizer.schedule()
-    print_plans(plans)
+    # print_plans(plans)
 
     if run_graphql_server:
-        import graphql_server
-        plan_manager = graphql_server.PlanManager()
-        plan_manager.set_plans(plans)
-        graphql_server.start_graphql_server()
+        asyncio.run(forever(plans))
 
     print('DONE')
